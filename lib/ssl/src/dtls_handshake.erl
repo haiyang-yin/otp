@@ -19,12 +19,13 @@
 
 -include("dtls_handshake.hrl").
 -include("dtls_record.hrl").
+-include("dtls_transport.hrl").
 -include("ssl_internal.hrl").
 -include("ssl_alert.hrl").
 
--export([client_hello/8, client_hello/9, hello/4,
+-export([client_hello/8, client_hello/9, hello/3, hello/4,
 	 get_dtls_handshake/2,
-	 %%dtls_handshake_new_flight/1, dtls_handshake_new_epoch/1,
+	 dtls_handshake_new_flight/1, dtls_handshake_new_epoch/1,
 	 encode_handshake/3]).
 
 -type dtls_handshake() :: #client_hello{} | #hello_verify_request{} | 
@@ -61,7 +62,8 @@ client_hello(Host, Port, Cookie, ConnectionStates,
     Version =  dtls_record:highest_protocol_version(Versions),
     Pending = ssl_record:pending_connection_state(ConnectionStates, read),
     SecParams = Pending#connection_state.security_parameters,
-    CipherSuites = ssl_handshake:available_suites(UserSuites, Version),
+    CipherSuites = ssl_handshake:available_suites(UserSuites,
+                       dtls_v1:corresponding_tls_version(Version)),
 
     Extensions = ssl_handshake:client_hello_extensions(Host, dtls_v1:corresponding_tls_version(Version), CipherSuites,
 						SslOpts, ConnectionStates, Renegotiation),
@@ -77,12 +79,31 @@ client_hello(Host, Port, Cookie, ConnectionStates,
 		  extensions = Extensions
 		 }.
 
+hello(Address, Port,
+      #ssl_tls{epoch = _Epoch, sequence_number = _Seq,
+	       version = Version} = Record) ->
+    case get_dtls_handshake(Record,
+				dtls_handshake_new_flight(undefined)) of
+	{[Hello | _], _} ->
+	    hello(Address, Port, Version, Hello);
+	{retransmit, HandshakeState} ->
+	    {retransmit, HandshakeState}
+    end.
+
+hello(#hello_verify_request{cookie = Cookie}, SslOpts,
+      {Port, _, Cache, CacheCb, ConnectionStates, Cert, Host}, Renegotiation) ->
+    %% DTLS Sec 4.2.1
+    %% When responding to a HelloVerifyRequest, the client must use the same
+    %% parameters {version, random, session_id, cipher_suites, compression_method}
+    %% as it did in the original ClientHello.
+    client_hello(Host, Port, Cookie, ConnectionStates,
+                 SslOpts, Cache, CacheCb, Renegotiation, Cert);
 hello(#server_hello{server_version = Version, random = Random,
 		    cipher_suite = CipherSuite,
 		    compression_method = Compression,
 		    session_id = SessionId, extensions = HelloExt},
       #ssl_options{versions = SupportedVersions} = SslOpt,
-      ConnectionStates0, Renegotiation) ->
+      {_, _, _, _, ConnectionStates0, _, _}, Renegotiation) ->
     case dtls_record:is_acceptable_version(Version, SupportedVersions) of
 	true ->
 	    handle_server_hello_extensions(Version, SessionId, Random, CipherSuite,
@@ -91,49 +112,49 @@ hello(#server_hello{server_version = Version, random = Random,
 	    ?ALERT_REC(?FATAL, ?PROTOCOL_VERSION)
     end;
 
-hello(#client_hello{client_version = ClientVersion}, _Options, {_,_,_,_,ConnectionStates,_}, _Renegotiation) ->      
-    %% Return correct typ to make dialyzer happy until we have time to make the real imp.
-    {ClientVersion, {new, #session{}}, ConnectionStates, #hello_extensions{}}.
+hello(#client_hello{client_version=ClientVersion}=Hello,
+      #ssl_options{versions=Versions}=SslOpts, {_,_,_,_,_,_,Socket}=Info, Renegotiation) ->
+    #dtls_socket{client_addr=Address, client_port=Port}=Socket,
+    #client_hello{client_version = {Major, Minor},
+		  random = Random,
+		  session_id = SessionId,
+		  cipher_suites = CipherSuites,
+		  compression_methods = CompressionMethods} = Hello,
+    CookieData = [address_to_bin(Address, Port),
+		  <<?BYTE(Major), ?BYTE(Minor)>>,
+		  Random, SessionId, CipherSuites, CompressionMethods],
+    Cookie = crypto:hmac(sha, <<"secret">>, CookieData),
 
-%% hello(Address, Port,
-%%       #ssl_tls{epoch = _Epoch, sequence_number = _Seq,
-%% 	       version = Version} = Record) ->
-%%     case get_dtls_handshake(Record,
-%% 				dtls_handshake_new_flight(undefined)) of
-%% 	{[Hello | _], _} ->
-%% 	    hello(Address, Port, Version, Hello);
-%% 	{retransmit, HandshakeState} ->
-%% 	    {retransmit, HandshakeState}
-%%     end.
-					     
-%% hello(Address, Port, Version, Hello) ->
-%%     #client_hello{client_version = {Major, Minor},
-%% 		  random = Random,
-%% 		  session_id = SessionId,
-%% 		  cipher_suites = CipherSuites,
-%% 		  compression_methods = CompressionMethods} = Hello,
-%%     CookieData = [address_to_bin(Address, Port),
-%% 		  <<?BYTE(Major), ?BYTE(Minor)>>,
-%% 		  Random, SessionId, CipherSuites, CompressionMethods],
-%%     Cookie = crypto:hmac(sha, <<"secret">>, CookieData),
-
-%%     case Hello of
-%% 	#client_hello{cookie = Cookie} ->
-%% 	    accept;
-%% 	_ ->
-%% 	    %% generate HelloVerifyRequest
-%% 	    HelloVerifyRequest = enc_hs(#hello_verify_request{protocol_version = Version,
-%% 									  cookie = Cookie},
-%% 						    Version, 0, 1400),
-%% 	    {reply, HelloVerifyRequest}
-%%     end.
+    case Hello of
+	#client_hello{cookie = Cookie} ->
+            Version = ssl_handshake:select_version(dtls_record, ClientVersion, Versions),
+            case ssl_cipher:is_fallback(CipherSuites) of
+                true ->
+                    Highest = dtls_record:highest_protocol_version(Versions),
+                    case dtls_record:is_higher(Highest, Version) of
+                        true ->
+                            ?ALERT_REC(?FATAL, ?INAPPROPRIATE_FALLBACK);
+                        false ->
+                            handle_client_hello(Version, Hello, SslOpts, Info, Renegotiation)
+                    end;
+                false ->
+                    handle_client_hello(Version, Hello, SslOpts, Info, Renegotiation)
+            end;
+	_ ->
+	    %% generate HelloVerifyRequest
+	    {verifying, #hello_verify_request{protocol_version = ClientVersion,
+                                              cookie = Cookie}}
+    end.
 
 %% %%--------------------------------------------------------------------
 encode_handshake(Handshake, Version, MsgSeq) ->
+    %% Bin is the body of Handshake
     {MsgType, Bin} = enc_handshake(Handshake, Version),
     Len = byte_size(Bin),
     EncHandshake = [MsgType, ?uint24(Len), ?uint16(MsgSeq), ?uint24(0), ?uint24(Len), Bin],
-    FragmentedHandshake = dtls_fragment(erlang:iolist_size(EncHandshake), MsgType, Len, MsgSeq, Bin, 0, []),
+    %% FragmentedHandshake = dtls_fragment(erlang:iolist_size(EncHandshake), MsgType, Len, MsgSeq, Bin, 0, []),
+    %% DTLS v1.2 Section 4.1.1.1 PMTU issue.
+    FragmentedHandshake = dtls_fragment(?DEFAULT_MSS_UDP, MsgType, Len, MsgSeq, Bin, 0, []),
     {EncHandshake, FragmentedHandshake}.
 
 %%--------------------------------------------------------------------
@@ -144,8 +165,11 @@ encode_handshake(Handshake, Version, MsgSeq) ->
 %% and returns it as a list of handshake messages, also returns a new
 %% DTLS state
 %%--------------------------------------------------------------------
+%% This is the initial state for dtls transport
 get_dtls_handshake(Record, <<>>) ->
-    get_dtls_handshake_aux(Record, #dtls_hs_state{}); %% Init handshake state!?
+    get_dtls_handshake_aux(
+        Record, #dtls_hs_state{fragments = gb_trees:empty(),
+                               completed = []}); %% Init handshake state!?
 get_dtls_handshake(Record, HsState) ->
     get_dtls_handshake_aux(Record, HsState).
 
@@ -154,39 +178,79 @@ get_dtls_handshake(Record, HsState) ->
 %% %%
 %% %% Description: Reset the DTLS decoder state for a new Epoch
 %% %%--------------------------------------------------------------------
-%% dtls_handshake_new_epoch(<<>>) ->
-%%     dtls_hs_state_init();
-%% dtls_handshake_new_epoch(HsState) ->
-%%     HsState#dtls_hs_state{highest_record_seq = 0,
-%%   			  starting_read_seq = HsState#dtls_hs_state.current_read_seq,
-%%   			  fragments = gb_trees:empty(), completed = []}.
+dtls_handshake_new_epoch(<<>>) ->
+    #dtls_hs_state{highest_record_seq = 0,
+                   starting_read_seq = 0,
+                   fragments = gb_trees:empty(), completed = []};
+dtls_handshake_new_epoch(HsState) ->
+    HsState#dtls_hs_state{highest_record_seq = 0,
+                          starting_read_seq = HsState#dtls_hs_state.current_read_seq,
+                          fragments = gb_trees:empty(), completed = []}.
 
 %% %--------------------------------------------------------------------
 %% -spec dtls_handshake_new_flight(integer() | undefined) -> #dtls_hs_state{}.
 %% %
 %% % Description: Init the DTLS decoder state for a new Flight
-%% dtls_handshake_new_flight(ExpectedReadReq) ->
-%%     #dtls_hs_state{current_read_seq = ExpectedReadReq,
-%% 		   highest_record_seq = 0,
-%% 		   starting_read_seq = 0,
-%% 		   fragments = gb_trees:empty(), completed = []}.
+dtls_handshake_new_flight(ExpectedReadReq) ->
+    #dtls_hs_state{current_read_seq = ExpectedReadReq,
+		   highest_record_seq = 0,
+		   starting_read_seq = 0,
+		   fragments = gb_trees:empty(), completed = []}.
 
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
+handle_client_hello(Version, #client_hello{session_id = SugesstedId,
+                                       cipher_suites = CipherSuites,
+                                       compression_methods = Compressions,
+                                       random = Random,
+                                       extensions = #hello_extensions{elliptic_curves = Curves} = HelloExt},
+                #ssl_options{versions = Versions} = SslOpts,
+         {Port, Session0, Cache, CacheCb, ConnectionStates0, Cert, _}, Renegotiation) ->
+    case dtls_record:is_acceptable_version(Version, Versions) of
+        true ->
+            ECCCurve = ssl_handshake:select_curve(Curves, ssl_handshake:supported_ecc(Version)),
+            {Type, #session{cipher_suite = CipherSuite} = Session1}
+                = ssl_handshake:select_session(SugesstedId, CipherSuites, Compressions,
+                                               Port, Session0#session{ecc = ECCCurve}, Version,
+                                               SslOpts, Cache, CacheCb, Cert),
+            case CipherSuite of
+                no_suite ->
+                    ?ALERT_REC(?FATAL, ?INSUFFICIENT_SECURITY);
+                _ ->
+                    handle_client_hello_extensions(Version, Type, Random, CipherSuites, HelloExt,
+                                                   SslOpts, Session1, ConnectionStates0,
+                                                   Renegotiation)
+            end;
+        false ->
+            ?ALERT_REC(?FATAL, ?PROTOCOL_VERSION)
+    end.
+
+handle_client_hello_extensions(Version, Type, Random, CipherSuites,
+                        HelloExt, SslOpts, Session0, ConnectionStates0, Renegotiation) ->
+    try ssl_handshake:handle_client_hello_extensions(dtls_record, Random, CipherSuites, HelloExt,
+                                                     dtls_v1:corresponding_tls_version(Version), % Version,
+                                                     SslOpts, Session0, ConnectionStates0, Renegotiation) of
+        {Session, ConnectionStates, Protocol, ServerHelloExt} ->
+            {Version, {Type, Session}, ConnectionStates, Protocol, ServerHelloExt}
+    catch throw:Alert ->
+            Alert
+    end.
+
 handle_server_hello_extensions(Version, SessionId, Random, CipherSuite,
 			       Compression, HelloExt, SslOpt, ConnectionStates0, Renegotiation) ->
     case ssl_handshake:handle_server_hello_extensions(dtls_record, Random, CipherSuite,
-						      Compression, HelloExt, Version,
+						      Compression, HelloExt,
+                                                      dtls_v1:corresponding_tls_version(Version),
 						      SslOpt, ConnectionStates0, Renegotiation) of
 	#alert{} = Alert ->
 	    Alert;
-	{ConnectionStates, Protocol} ->
-	    {Version, SessionId, ConnectionStates, Protocol}
+	{ConnectionStates, ProtocolExt, Protocol} ->
+	    {Version, SessionId, ConnectionStates, ProtocolExt, Protocol}
     end.
 
 dtls_fragment(Mss, MsgType, Len, MsgSeq, Bin, Offset, Acc)
-  when byte_size(Bin) + 12 < Mss ->
+  when byte_size(Bin) + 12 =< Mss ->
     FragmentLen = byte_size(Bin),
     BinMsg = [MsgType, ?uint24(Len), ?uint16(MsgSeq), ?uint24(Offset), ?uint24(FragmentLen), Bin],
     lists:reverse([BinMsg|Acc]);
@@ -267,7 +331,7 @@ reassemble_dtls_fragment(SeqNo, Type, Length, MessageSeq, 0, Length,
  			 Body, HsState0 = #dtls_hs_state{current_read_seq = undefined})
   when Type == ?CLIENT_HELLO;
        Type == ?SERVER_HELLO;
-        Type == ?HELLO_VERIFY_REQUEST ->
+       Type == ?HELLO_VERIFY_REQUEST ->
     %% First message, should be client hello
     %% return the current message and set the next expected Sequence
     %%
@@ -275,7 +339,11 @@ reassemble_dtls_fragment(SeqNo, Type, Length, MessageSeq, 0, Length,
     %%       HelloVerifyRequest have to have message_seq = 0, ServerHello
     %%       can have a message_seq of 0 or 1
     %%
-    {HsState0#dtls_hs_state{current_read_seq = MessageSeq + 1}, SeqNo, Body};
+    %% This is the case where no fragmentation on first messages: ClientHello,
+    %% ServerHello, HelloVerifyRequest. current_read_seq keeps the current message
+    %% sequence received.
+    dtls_fragment_start(SeqNo, Type, Length, MessageSeq, 0, Length, Body,
+                        HsState0#dtls_hs_state{starting_read_seq = MessageSeq});
 
 reassemble_dtls_fragment(_SeqNo, _Type, Length, _MessageSeq, _, Length,
 			 _Body, HsState = #dtls_hs_state{current_read_seq = undefined}) ->
@@ -318,6 +386,22 @@ reassemble_dtls_fragment(SeqNo, Type, Length, MessageSeq, 0, Length,
  		dtls_fragment_init(Length, 0, Length, Body)},
     dtls_hs_state_add_fragment(MessageSeq, Fragment, HsState);
 
+reassemble_dtls_fragment(SeqNo, Type, Length, MessageSeq, 0, FragmentLength,
+                         Body, HsState0 = #dtls_hs_state{current_read_seq = undefined})
+  when Type == ?CLIENT_HELLO;
+       Type == ?SERVER_HELLO;
+       Type == ?HELLO_VERIFY_REQUEST ->
+    %% First message, should be client hello
+    %% return the current message and set the next expected Sequence
+    %%
+    %% Note: this could (should?) be restricted further, ClientHello and
+    %%       HelloVerifyRequest have to have message_seq = 0, ServerHello
+    %%       can have a message_seq of 0 or 1
+    %%
+    %% current_read_seq = undefined restricts that it is the first record. Check whether
+    %% it is fragmented or not.
+    dtls_fragment_start(SeqNo, Type, Length, MessageSeq, 0, FragmentLength, Body, HsState0);
+
 reassemble_dtls_fragment(_SeqNo, _Type, Length, MessageSeq, FragmentOffset, FragmentLength,
  			 _Body,
  			 HsState = #dtls_hs_state{current_read_seq = CurrentReadSeq})
@@ -328,7 +412,8 @@ reassemble_dtls_fragment(_SeqNo, _Type, _Length, MessageSeq, _FragmentOffset, _F
  			 _Body,
  			 HsState = #dtls_hs_state{current_read_seq = CurrentReadSeq})
   when MessageSeq < CurrentReadSeq ->
-    HsState;
+    {retransmit, HsState};
+    % HsState;
 
 reassemble_dtls_fragment(SeqNo, Type, Length, MessageSeq,
  			 FragmentOffset, FragmentLength,
@@ -350,8 +435,9 @@ dtls_fragment_start(SeqNo, Type, Length, MessageSeq,
 		    Body, HsState = #dtls_hs_state{fragments = Fragments0}) ->
     Fragment = {SeqNo, Type, Length, MessageSeq,
  		dtls_fragment_init(Length, FragmentOffset, FragmentLength, Body)},
-     Fragments1 = gb_trees:insert(MessageSeq, Fragment, Fragments0),
-    HsState#dtls_hs_state{fragments = Fragments1}.
+    Fragments1 = gb_trees:insert(MessageSeq, Fragment, Fragments0),
+    HsState#dtls_hs_state{current_read_seq = MessageSeq,
+                          fragments = Fragments1}.
 
 dtls_fragment_reassemble(SeqNo, Type, Length, MessageSeq,
 			 FragmentOffset, FragmentLength,
@@ -438,8 +524,6 @@ enc_handshake(#client_hello{client_version = {Major, Minor},
 enc_handshake(HandshakeMsg, Version) ->
     ssl_handshake:encode_handshake(HandshakeMsg, Version).
 
-enc_client_hello_cookie(_, <<>>) ->
-    <<>>;
 enc_client_hello_cookie(_, Cookie) ->
     CookieLength = byte_size(Cookie),
     <<?BYTE(CookieLength), Cookie/binary>>.
@@ -472,7 +556,7 @@ decode_handshake(_Version, ?HELLO_VERIFY_REQUEST, <<?BYTE(Major), ?BYTE(Minor),
 decode_handshake(Version, Tag, Msg) ->
     ssl_handshake:decode_handshake(Version, Tag, Msg).
 
-%% address_to_bin({A,B,C,D}, Port) ->
-%%     <<0:80,16#ffff:16,A,B,C,D,Port:16>>;
-%% address_to_bin({A,B,C,D,E,F,G,H}, Port) ->
-%%     <<A:16,B:16,C:16,D:16,E:16,F:16,G:16,H:16,Port:16>>.
+address_to_bin({A,B,C,D}, Port) ->
+    <<0:80,16#ffff:16,A,B,C,D,Port:16>>;
+address_to_bin({A,B,C,D,E,F,G,H}, Port) ->
+    <<A:16,B:16,C:16,D:16,E:16,F:16,G:16,H:16,Port:16>>.

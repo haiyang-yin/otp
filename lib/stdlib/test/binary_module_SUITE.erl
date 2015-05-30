@@ -506,12 +506,35 @@ do_interesting(Module) ->
     ?line [<<1,2,3>>,<<6>>] = Module:split(<<1,2,3,4,5,6,7,8>>,
 					   [<<4,5>>,<<7>>,<<8>>],
 					   [global,trim]),
+    ?line [<<1,2,3>>,<<6>>] = Module:split(<<1,2,3,4,5,6,7,8>>,
+					   [<<4,5>>,<<7>>,<<8>>],
+					   [global,trim_all]),
     ?line [<<1,2,3,4,5,6,7,8>>] = Module:split(<<1,2,3,4,5,6,7,8>>,
 					       [<<4,5>>,<<7>>,<<8>>],
 					       [global,trim,{scope,{0,4}}]),
     ?line [<<1,2,3>>,<<6,7,8>>] = Module:split(<<1,2,3,4,5,6,7,8>>,
 					       [<<4,5>>,<<7>>,<<8>>],
 					       [global,trim,{scope,{0,5}}]),
+
+    ?line [<<>>,<<>>,<<3>>,<<6,7,8>>] = Module:split(<<1,2,3,4,5,6,7,8>>,
+					   [<<1>>,<<2>>,<<4,5>>],
+					   [global,trim]),
+    ?line [<<3>>,<<6,7,8>>] = Module:split(<<1,2,3,4,5,6,7,8>>,
+					   [<<1>>,<<2>>,<<4,5>>],
+					   [global,trim_all]),
+
+    ?line [<<1,2,3>>,<<>>,<<7,8>>] = Module:split(<<1,2,3,4,5,6,7,8>>,
+					   [<<4,5>>,<<6>>],
+					   [global,trim]),
+    ?line [<<1,2,3>>,<<7,8>>] = Module:split(<<1,2,3,4,5,6,7,8>>,
+					   [<<4,5>>,<<6>>],
+					   [global,trim_all]),
+    ?line [<<>>,<<>>,<<3>>,<<>>,<<6>>] = Module:split(<<1,2,3,4,5,6,7,8>>,
+					   [<<1>>,<<2>>,<<4>>,<<5>>,<<7>>,<<8>>],
+					   [global,trim]),
+    ?line [<<3>>,<<6>>] = Module:split(<<1,2,3,4,5,6,7,8>>,
+					   [<<1>>,<<2>>,<<4>>,<<5>>,<<7>>,<<8>>],
+					   [global,trim_all]),
     ?line badarg = ?MASK_ERROR(
 		      Module:replace(<<1,2,3,4,5,6,7,8>>,
 				     [<<4,5>>,<<7>>,<<8>>],<<99>>,
@@ -970,43 +993,51 @@ random_parts(X,N) ->
 random_ref_comp(doc) ->
     ["Test pseudorandomly generated cases against reference imlementation"];
 random_ref_comp(Config) when is_list(Config) ->
-    ?line put(success_counter,0),
-    ?line random:seed({1271,769940,559934}),
-    ?line do_random_match_comp(5000,{1,40},{30,1000}),
+    put(success_counter,0),
+    random:seed({1271,769940,559934}),
+    Nr = {1,40},
+    Hr = {30,1000},
+    I1 = 1500,
+    I2 = 5,
+    do_random_match_comp(I1,Nr,Hr),
     io:format("Number of successes: ~p~n",[get(success_counter)]),
-    ?line do_random_match_comp2(5000,{1,40},{30,1000}),
+    do_random_match_comp2(I1,Nr,Hr),
     io:format("Number of successes: ~p~n",[get(success_counter)]),
-    ?line do_random_match_comp3(5000,{1,40},{30,1000}),
+    do_random_match_comp3(I1,Nr,Hr),
     io:format("Number of successes: ~p~n",[get(success_counter)]),
-    ?line do_random_match_comp4(5000,{1,40},{30,1000}),
+    do_random_match_comp4(I1,Nr,Hr),
     io:format("Number of successes: ~p~n",[get(success_counter)]),
-    ?line do_random_matches_comp(5000,{1,40},{30,1000}),
+    do_random_matches_comp(I1,Nr,Hr),
     io:format("Number of successes: ~p~n",[get(success_counter)]),
-    ?line do_random_matches_comp2(5000,{1,40},{30,1000}),
+    do_random_matches_comp2(I1,Nr,Hr),
     io:format("Number of successes: ~p~n",[get(success_counter)]),
-    ?line do_random_matches_comp3(5,{1,40},{30,1000}),
-    ?line erts_debug:set_internal_state(available_internal_state,true),
-    ?line io:format("oldlimit: ~p~n",[ erts_debug:set_internal_state(binary_loop_limit,100)]),
-    ?line do_random_match_comp(5000,{1,40},{30,1000}),
-    ?line do_random_matches_comp3(5,{1,40},{30,1000}),
-    ?line io:format("limit was: ~p~n",[ erts_debug:set_internal_state(binary_loop_limit,default)]),
-    ?line erts_debug:set_internal_state(available_internal_state,false),
+    do_random_matches_comp3(I2,Nr,Hr),
+    erts_debug:set_internal_state(available_internal_state,true),
+    io:format("oldlimit: ~p~n",[ erts_debug:set_internal_state(binary_loop_limit,100)]),
+    do_random_match_comp(I1,Nr,Hr),
+    do_random_matches_comp3(I2,Nr,Hr),
+    io:format("limit was: ~p~n",[ erts_debug:set_internal_state(binary_loop_limit,default)]),
+    erts_debug:set_internal_state(available_internal_state,false),
     ok.
 
 random_ref_sr_comp(doc) ->
     ["Test pseudorandomly generated cases against reference imlementation of split and replace"];
 random_ref_sr_comp(Config) when is_list(Config) ->
-    ?line put(success_counter,0),
-    ?line random:seed({1271,769940,559934}),
-    ?line do_random_split_comp(5000,{1,40},{30,1000}),
+    put(success_counter,0),
+    random:seed({1271,769940,559934}),
+    Nr = {1,40},
+    Hr = {30,1000},
+    I1 = 1500,
+    do_random_split_comp(I1,Nr,Hr),
     io:format("Number of successes: ~p~n",[get(success_counter)]),
-    ?line do_random_replace_comp(5000,{1,40},{30,1000}),
+    do_random_replace_comp(I1,Nr,Hr),
     io:format("Number of successes: ~p~n",[get(success_counter)]),
-    ?line do_random_split_comp2(5000,{1,40},{30,1000}),
+    do_random_split_comp2(I1,Nr,Hr),
     io:format("Number of successes: ~p~n",[get(success_counter)]),
-    ?line do_random_replace_comp2(5000,{1,40},{30,1000}),
+    do_random_replace_comp2(I1,Nr,Hr),
     io:format("Number of successes: ~p~n",[get(success_counter)]),
     ok.
+
 random_ref_fla_comp(doc) ->
     ["Test pseudorandomly generated cases against reference imlementation of split and replace"];
 random_ref_fla_comp(Config) when is_list(Config) ->
@@ -1107,7 +1138,9 @@ do_random_matches_comp3(N,NeedleRange,HaystackRange) ->
     Needles = [random_substring(NeedleRange,Haystack) ||
 		  _ <- lists:duplicate(NumNeedles,a)],
     RefRes = binref:matches(Haystack,Needles),
-    true = do_matches_comp_loop(10000,Needles,Haystack, RefRes),
+    RefRes = binary:matches(Haystack,Needles),
+    Compiled = binary:compile_pattern(Needles),
+    true = do_matches_comp_loop(10000,Compiled,Haystack, RefRes),
     do_random_matches_comp3(N-1,NeedleRange,HaystackRange).
 
 do_matches_comp_loop(0,_,_,_) ->
@@ -1137,9 +1170,8 @@ do_matches_comp2(N,H,A) ->
     end.
 do_matches_comp(N,H) ->
     A = ?MASK_ERROR(binref:matches(H,N)),
-    B = ?MASK_ERROR(binref:matches(H,binref:compile_pattern(N))),
-    C = ?MASK_ERROR(binary:matches(H,N)),
-    D = ?MASK_ERROR(binary:matches(make_unaligned(H),
+    B = ?MASK_ERROR(binary:matches(H,N)),
+    C = ?MASK_ERROR(binary:matches(make_unaligned(H),
 				   binary:compile_pattern([make_unaligned2(X) || X <- N]))),
     if
 	A =/= nomatch ->
@@ -1147,14 +1179,14 @@ do_matches_comp(N,H) ->
 	true ->
 	    ok
     end,
-    case {(A =:= B), (B =:= C),(C =:= D)} of
-	{true,true,true} ->
+    case {(A =:= B), (B =:= C)} of
+	{true,true} ->
 	    true;
 	_ ->
 	    io:format("Failed to match ~p (needle) against ~s (haystack)~n",
 		      [N,H]),
-	    io:format("A:~p,~nB:~p,~n,C:~p,~n,D:~p.~n",
-		      [A,B,C,D]),
+	    io:format("A:~p,~nB:~p,~n,C:~p,~n",
+		      [A,B,C]),
 	    exit(mismatch)
     end.
 
@@ -1196,32 +1228,9 @@ do_random_match_comp4(N,NeedleRange,HaystackRange) ->
 
 do_match_comp(N,H) ->
     A = ?MASK_ERROR(binref:match(H,N)),
-    B = ?MASK_ERROR(binref:match(H,binref:compile_pattern([N]))),
-    C = ?MASK_ERROR(binary:match(make_unaligned(H),N)),
-    D = ?MASK_ERROR(binary:match(H,binary:compile_pattern([N]))),
-    E = ?MASK_ERROR(binary:match(H,binary:compile_pattern(make_unaligned(N)))),
-    if
-	A =/= nomatch ->
-	    put(success_counter,get(success_counter)+1);
-	true ->
-	    ok
-    end,
-    case {(A =:= B), (B =:= C),(C =:= D),(D =:= E)} of
-	{true,true,true,true} ->
-	    true;
-	_ ->
-	    io:format("Failed to match ~s (needle) against ~s (haystack)~n",
-		      [N,H]),
-	    io:format("A:~p,~nB:~p,~n,C:~p,~n,D:~p,E:~p.~n",
-		      [A,B,C,D,E]),
-	    exit(mismatch)
-    end.
-
-do_match_comp3(N,H) ->
-    A = ?MASK_ERROR(binref:match(H,N)),
-    B = ?MASK_ERROR(binref:match(H,binref:compile_pattern(N))),
-    C = ?MASK_ERROR(binary:match(H,N)),
-    D = ?MASK_ERROR(binary:match(H,binary:compile_pattern(N))),
+    B = ?MASK_ERROR(binary:match(make_unaligned(H),N)),
+    C = ?MASK_ERROR(binary:match(H,binary:compile_pattern([N]))),
+    D = ?MASK_ERROR(binary:match(H,binary:compile_pattern(make_unaligned(N)))),
     if
 	A =/= nomatch ->
 	    put(success_counter,get(success_counter)+1);
@@ -1239,6 +1248,27 @@ do_match_comp3(N,H) ->
 	    exit(mismatch)
     end.
 
+do_match_comp3(N,H) ->
+    A = ?MASK_ERROR(binref:match(H,N)),
+    B = ?MASK_ERROR(binary:match(H,N)),
+    C = ?MASK_ERROR(binary:match(H,binary:compile_pattern(N))),
+    if
+	A =/= nomatch ->
+	    put(success_counter,get(success_counter)+1);
+	true ->
+	    ok
+    end,
+    case {(A =:= B),(B =:= C)} of
+	{true,true} ->
+	    true;
+	_ ->
+	    io:format("Failed to match ~s (needle) against ~s (haystack)~n",
+		      [N,H]),
+	    io:format("A:~p,~nB:~p,~n,C:~p.~n",
+		      [A,B,C]),
+	    exit(mismatch)
+    end.
+
 do_random_split_comp(0,_,_) ->
     ok;
 do_random_split_comp(N,NeedleRange,HaystackRange) ->
@@ -1247,6 +1277,8 @@ do_random_split_comp(N,NeedleRange,HaystackRange) ->
     true = do_split_comp(Needle,Haystack,[]),
     true = do_split_comp(Needle,Haystack,[global]),
     true = do_split_comp(Needle,Haystack,[global,trim]),
+    true = do_split_comp(Needle,Haystack,[global,trim_all]),
+    true = do_split_comp(Needle,Haystack,[global,trim,trim_all]),
     do_random_split_comp(N-1,NeedleRange,HaystackRange).
 do_random_split_comp2(0,_,_) ->
     ok;
@@ -1257,6 +1289,9 @@ do_random_split_comp2(N,NeedleRange,HaystackRange) ->
 		  _ <- lists:duplicate(NumNeedles,a)],
     true = do_split_comp(Needles,Haystack,[]),
     true = do_split_comp(Needles,Haystack,[global]),
+    true = do_split_comp(Needles,Haystack,[global,trim]),
+    true = do_split_comp(Needles,Haystack,[global,trim_all]),
+    true = do_split_comp(Needles,Haystack,[global,trim,trim_all]),
     do_random_split_comp2(N-1,NeedleRange,HaystackRange).
 
 do_split_comp(N,H,Opts) ->

@@ -43,6 +43,7 @@
 	 }).
 
 -record(connection_states, {
+          msg_sequence = 0,  %% Only used by DTLS
 	  current_read,
 	  pending_read,
 	  current_write,
@@ -90,11 +91,14 @@
 -define('3DES', 4).
 -define(DES40, 5).
 -define(IDEA, 6).
--define(AES, 7). 
+-define(AES_CBC, 7).
+-define(AES_GCM, 8).
+-define(CHACHA20_POLY1305, 9).
 
 %% CipherType
 -define(STREAM, 0).
 -define(BLOCK, 1).
+-define(AEAD, 2).
 
 %% IsExportable
 %-define(TRUE, 0).  %% Already defined by ssl_internal.hrl

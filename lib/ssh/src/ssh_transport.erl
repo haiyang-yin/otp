@@ -31,6 +31,8 @@
 
 -export([versions/2, hello_version_msg/1]).
 -export([next_seqnum/1, decrypt_first_block/2, decrypt_blocks/3,
+	 supported_algorithms/0, supported_algorithms/1,
+	 default_algorithms/0, default_algorithms/1,
 	 is_valid_mac/3,
 	 handle_hello_version/1,
 	 key_exchange_init_msg/1,
@@ -42,6 +44,68 @@
 	 unpack/3, decompress/2, ssh_packet/2, pack/2, msg_data/1,
 	 sign/3, verify/4]).
 
+%%%----------------------------------------------------------------------------
+%%%
+%%% There is a difference between supported and default algorithms. The
+%%% SUPPORTED algorithms can be handled (maybe untested...). The DEFAULT ones
+%%% are announced in ssh_msg_kexinit and in ssh:default_algorithms/0 to the
+%%% user.
+%%%
+%%% A supported algorithm can be requested in the option 'preferred_algorithms',
+%%% but may give unexpected results because of being promoted to default.
+%%%
+%%% This makes it possible to add experimental algorithms (in supported_algorithms)
+%%% and test them without letting the default users know about them.
+%%%
+
+default_algorithms() -> [{K,default_algorithms(K)} || K <- algo_classes()].
+
+algo_classes() -> [kex, public_key, cipher, mac, compression].
+
+default_algorithms(compression) ->
+    %% Do not announce 'zlib@openssh.com' because there seem to be problems
+    supported_algorithms(compression, same(['zlib@openssh.com']));
+default_algorithms(Alg) ->
+    supported_algorithms(Alg).
+
+
+supported_algorithms() -> [{K,supported_algorithms(K)} || K <- algo_classes()].
+
+supported_algorithms(kex) ->
+    ['diffie-hellman-group1-sha1'];
+supported_algorithms(public_key) ->
+    ssh_auth:default_public_key_algorithms();
+supported_algorithms(cipher) ->
+    Supports = crypto:supports(),
+    CipherAlgos = [{aes_ctr, 'aes128-ctr'}, {aes_cbc128, 'aes128-cbc'}, {des3_cbc, '3des-cbc'}],
+    Algs = [SshAlgo ||
+	       {CryptoAlgo, SshAlgo} <- CipherAlgos,
+	       lists:member(CryptoAlgo, proplists:get_value(ciphers, Supports, []))],
+    same(Algs);
+supported_algorithms(mac) ->
+    Supports = crypto:supports(),
+    HashAlgos = [{sha256, 'hmac-sha2-256'}, {sha, 'hmac-sha1'}],
+    Algs = [SshAlgo ||
+	       {CryptoAlgo, SshAlgo} <- HashAlgos,
+	       lists:member(CryptoAlgo, proplists:get_value(hashs, Supports, []))],
+    same(Algs);
+supported_algorithms(compression) ->
+    same(['none','zlib','zlib@openssh.com']).
+
+
+supported_algorithms(Key, [{client2server,BL1},{server2client,BL2}]) ->
+    [{client2server,As1},{server2client,As2}] = supported_algorithms(Key),
+    [{client2server,As1--BL1},{server2client,As2--BL2}];
+supported_algorithms(Key, BlackList) ->
+    supported_algorithms(Key) -- BlackList.
+
+    
+
+
+same(Algs) ->  [{client2server,Algs}, {server2client,Algs}].
+
+
+%%%----------------------------------------------------------------------------
 versions(client, Options)->
     Vsn = proplists:get_value(vsn, Options, ?DEFAULT_CLIENT_VERSION),
     {Vsn, format_version(Vsn, software_version(Options))};
@@ -128,61 +192,44 @@ key_exchange_init_msg(Ssh0) ->
 
 kex_init(#ssh{role = Role, opts = Opts, available_host_keys = HostKeyAlgs}) ->
     Random = ssh_bits:random(16),
-    Compression = case proplists:get_value(compression, Opts, none) of
-		      openssh_zlib -> ["zlib@openssh.com", "none"];
-		      zlib -> ["zlib", "none"];
-		      none -> ["none", "zlib"]
-		  end,
-    kexinit_messsage(Role, Random, Compression, HostKeyAlgs).
+    PrefAlgs =
+	case proplists:get_value(preferred_algorithms,Opts) of
+	    undefined -> 
+		default_algorithms();
+	    Algs0 ->
+		Algs0
+	end,
+    kexinit_message(Role, Random, PrefAlgs, HostKeyAlgs).
 
 key_init(client, Ssh, Value) ->
     Ssh#ssh{c_keyinit = Value};
 key_init(server, Ssh, Value) ->
     Ssh#ssh{s_keyinit = Value}.
 
-available_ssh_algos() ->
-    Supports = crypto:supports(),
-    CipherAlgos = [{aes_ctr, "aes128-ctr"}, {aes_cbc128, "aes128-cbc"}, {des3_cbc, "3des-cbc"}],
-    Ciphers = [SshAlgo ||
-	{CryptoAlgo, SshAlgo} <- CipherAlgos,
-	lists:member(CryptoAlgo, proplists:get_value(ciphers, Supports, []))],
-    HashAlgos = [{sha256, "hmac-sha2-256"}, {sha, "hmac-sha1"}],
-    Hashs = [SshAlgo ||
-	{CryptoAlgo, SshAlgo} <- HashAlgos,
-	lists:member(CryptoAlgo, proplists:get_value(hashs, Supports, []))],
-    {Ciphers, Hashs}.
 
-kexinit_messsage(client, Random, Compression, HostKeyAlgs) ->
-    {CipherAlgs, HashAlgs} = available_ssh_algos(),
-    #ssh_msg_kexinit{ 
-		  cookie = Random,
-		  kex_algorithms = ["diffie-hellman-group1-sha1"],
-		  server_host_key_algorithms = HostKeyAlgs,
-		  encryption_algorithms_client_to_server = CipherAlgs,
-		  encryption_algorithms_server_to_client = CipherAlgs,
-		  mac_algorithms_client_to_server = HashAlgs,
-		  mac_algorithms_server_to_client = HashAlgs,
-		  compression_algorithms_client_to_server = Compression,
-		  compression_algorithms_server_to_client = Compression,
-		  languages_client_to_server = [],
-		  languages_server_to_client = []
-		 };
-
-kexinit_messsage(server, Random, Compression, HostKeyAlgs) ->
-    {CipherAlgs, HashAlgs} = available_ssh_algos(),
+kexinit_message(_Role, Random, Algs, HostKeyAlgs) ->
     #ssh_msg_kexinit{
 		  cookie = Random,
-		  kex_algorithms = ["diffie-hellman-group1-sha1"],
+		  kex_algorithms = to_strings( get_algs(kex,Algs) ),
 		  server_host_key_algorithms = HostKeyAlgs,
-		  encryption_algorithms_client_to_server = CipherAlgs,
-		  encryption_algorithms_server_to_client = CipherAlgs,
-		  mac_algorithms_client_to_server = HashAlgs,
-		  mac_algorithms_server_to_client = HashAlgs,
-		  compression_algorithms_client_to_server = Compression,
-		  compression_algorithms_server_to_client = Compression,
+		  encryption_algorithms_client_to_server = c2s(cipher,Algs),
+		  encryption_algorithms_server_to_client = s2c(cipher,Algs),
+		  mac_algorithms_client_to_server = c2s(mac,Algs),
+		  mac_algorithms_server_to_client = s2c(mac,Algs),
+		  compression_algorithms_client_to_server = c2s(compression,Algs),
+		  compression_algorithms_server_to_client = s2c(compression,Algs),
 		  languages_client_to_server = [],
 		  languages_server_to_client = []
 		 }.
+
+c2s(Key, Algs) -> x2y(client2server, Key, Algs).
+s2c(Key, Algs) -> x2y(server2client, Key, Algs).
+
+x2y(DirectionKey, Key, Algs) -> to_strings(proplists:get_value(DirectionKey, get_algs(Key,Algs))).
+
+get_algs(Key, Algs) -> proplists:get_value(Key, Algs, default_algorithms(Key)).
+
+to_strings(L) -> lists:map(fun erlang:atom_to_list/1, L).
 
 new_keys_message(Ssh0) ->
     {SshPacket, Ssh} = 
@@ -240,20 +287,30 @@ key_exchange_first_msg('diffie-hellman-group-exchange-sha1', Ssh0) ->
 
 handle_kexdh_init(#ssh_msg_kexdh_init{e = E}, Ssh0) ->
     {G, P} = dh_group1(),
-    {Private, Public} = dh_gen_key(G, P, 1024),
-    K = ssh_math:ipow(E, Private, P),
-    Key = get_host_key(Ssh0),
-    H = kex_h(Ssh0, Key, E, Public, K),
-    H_SIG = sign_host_key(Ssh0, Key, H),
-    {SshPacket, Ssh1} = ssh_packet(#ssh_msg_kexdh_reply{public_host_key = Key,
-							f = Public,
-							h_sig = H_SIG
-						       }, Ssh0),
-
-    {ok, SshPacket, Ssh1#ssh{keyex_key = {{Private, Public}, {G, P}},
-			     shared_secret = K,
-			     exchanged_hash = H,
-			     session_id = sid(Ssh1, H)}}.
+    if
+	1=<E, E=<(P-1) ->
+	    {Private, Public} = dh_gen_key(G, P, 1024),
+	    K = ssh_math:ipow(E, Private, P),
+	    Key = get_host_key(Ssh0),
+	    H = kex_h(Ssh0, Key, E, Public, K),
+	    H_SIG = sign_host_key(Ssh0, Key, H),
+	    {SshPacket, Ssh1} = ssh_packet(#ssh_msg_kexdh_reply{public_host_key = Key,
+								f = Public,
+								h_sig = H_SIG
+							       }, Ssh0),
+	    
+	    {ok, SshPacket, Ssh1#ssh{keyex_key = {{Private, Public}, {G, P}},
+				     shared_secret = K,
+				     exchanged_hash = H,
+				     session_id = sid(Ssh1, H)}};
+	true ->
+	    Error = {error,bad_e_from_peer},
+	    Disconnect = #ssh_msg_disconnect{
+			    code = ?SSH_DISCONNECT_KEY_EXCHANGE_FAILED,
+			    description = "Key exchange failed, 'f' out of bounds",
+			    language = "en"},
+	    throw({Error, Disconnect})
+    end.
 
 handle_kex_dh_gex_group(#ssh_msg_kex_dh_gex_group{p = P, g = G}, Ssh0) ->
     {Private, Public} = dh_gen_key(G,P,1024),
@@ -277,7 +334,7 @@ handle_new_keys(#ssh_msg_newkeys{}, Ssh0) ->
 %% %% Select algorithms
 handle_kexdh_reply(#ssh_msg_kexdh_reply{public_host_key = HostKey, f = F,
 					h_sig = H_SIG}, 
-		   #ssh{keyex_key = {{Private, Public}, {_G, P}}} = Ssh0) ->
+		   #ssh{keyex_key = {{Private, Public}, {_G, P}}} = Ssh0) when 1=<F, F=<(P-1)->
     K = ssh_math:ipow(F, Private, P),
     H = kex_h(Ssh0, HostKey, Public, F, K),
 
@@ -293,7 +350,15 @@ handle_kexdh_reply(#ssh_msg_kexdh_reply{public_host_key = HostKey, f = F,
 	      description = "Key exchange failed",
 	      language = "en"},
 	    throw({Error, Disconnect})
-    end.
+    end;
+handle_kexdh_reply(#ssh_msg_kexdh_reply{}, _SSH) ->
+    Error = {error,bad_f_from_peer},
+    Disconnect = #ssh_msg_disconnect{
+		    code = ?SSH_DISCONNECT_KEY_EXCHANGE_FAILED,
+		    description = "Key exchange failed, 'f' out of bounds",
+		    language = "en"},
+    throw({Error, Disconnect}).
+
 
 handle_kex_dh_gex_request(#ssh_msg_kex_dh_gex_request{min = _Min,
 						      n   = _NBits,
@@ -430,6 +495,7 @@ select_algorithm(Role, Client, Server) ->
 	       decompress = Decompression,
 	       c_lng = C_Lng,
 	       s_lng = S_Lng},
+%%ct:pal("~p~n Client=~p~n Server=~p~n    Alg=~p~n",[Role,Client,Server,Alg]),
     {ok, Alg}.
 
 select_encrypt_decrypt(client, Client, Server) ->

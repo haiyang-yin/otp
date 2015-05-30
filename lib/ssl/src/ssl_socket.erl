@@ -22,6 +22,7 @@
 
 -include("ssl_internal.hrl").
 -include("ssl_api.hrl").
+-include("dtls_transport.hrl").
 
 -export([socket/5, setopts/3, getopts/3, peername/2, sockname/2, port/2]).
 -export([emulated_options/0, internal_inet_values/0, default_inet_values/0,
@@ -123,6 +124,11 @@ start_link(Port, SockOpts, SslOpts) ->
 %%
 %% Description: Initiates the server
 %%--------------------------------------------------------------------
+init([Port, Opts, SslOpts]) when is_record(Port, dtls_socket) ->
+    process_flag(trap_exit, true),
+    %#dtls_socket{sock=ListenSock}=Port,
+    %true = link(ListenSock),
+    {ok, #state{emulated_opts = Opts, port = Port, ssl_opts = SslOpts}};
 init([Port, Opts, SslOpts]) ->
     process_flag(trap_exit, true),
     true = link(Port),
