@@ -43,6 +43,7 @@
 	 }).
 
 -record(connection_states, {
+          msg_sequence = 0,  %% Only used by DTLS
 	  current_read,
 	  pending_read,
 	  current_write,

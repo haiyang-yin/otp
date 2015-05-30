@@ -67,13 +67,15 @@ start() ->
     application:start(crypto),
     application:start(asn1),
     application:start(public_key),
-    application:start(ssl).
+    application:start(ssl),
+    dtls_socket_manager:init().
 
 start(Type) ->
     application:start(crypto, Type),
     application:start(asn1),
     application:start(public_key, Type),
-    application:start(ssl, Type).
+    application:start(ssl, Type),
+    dtls_socket_manager:init().
 
 %%--------------------------------------------------------------------
 -spec stop() -> ok.
@@ -81,7 +83,8 @@ start(Type) ->
 %% Description: Stops the ssl application.
 %%--------------------------------------------------------------------
 stop() ->
-    application:stop(ssl).
+    application:stop(ssl),
+    dtls_socket_manager:deinit().
 
 %%--------------------------------------------------------------------
 -spec connect(host() | port(), [connect_option()]) -> {ok, #sslsocket{}} |
@@ -99,8 +102,14 @@ connect(Socket, SslOptions) when is_port(Socket) ->
     connect(Socket, SslOptions, infinity).
 
 connect(Socket, SslOptions0, Timeout) when is_port(Socket) ->
-    {Transport,_,_,_} = proplists:get_value(cb_info, SslOptions0,
-					      {gen_tcp, tcp, tcp_closed, tcp_error}),
+    {Transport,_,_,_} =
+        case proplists:get_value(protocol, SslOptions0, tls) of
+            tls -> proplists:get_value(cb_info, SslOptions0,
+		      {gen_tcp, tcp, tcp_closed, tcp_error});
+            dtls -> proplists:get_value(cb_info, SslOptions0,
+                      {dtls_transport, udp, dtls_closed, dtls_error})
+        end,
+
     EmulatedOptions = ssl_socket:emulated_options(),
     {ok, SocketValues} = ssl_socket:getopts(Transport, Socket, EmulatedOptions),
     try handle_options(SslOptions0 ++ SocketValues) of
@@ -709,7 +718,13 @@ handle_options(Opts0) ->
 		    crl_cache = handle_option(crl_cache, Opts, {ssl_crl_cache, {internal, []}})
 		   },
 
-    CbInfo  = proplists:get_value(cb_info, Opts, {gen_tcp, tcp, tcp_closed, tcp_error}),
+    CbInfo = case SSLOptions#ssl_options.protocol of
+                 tls ->
+                     proplists:get_value(cb_info, Opts, {gen_tcp, tcp, tcp_closed, tcp_error});
+                 dtls ->
+                     proplists:get_value(cb_info, Opts, {dtls_transport, udp, dtls_closed, dtls_error})
+             end,
+
     SslOptions = [protocol, versions, verify, verify_fun, partial_chain,
 		  fail_if_no_peer_cert, verify_client_once,
 		  depth, cert, certfile, key, keyfile,
@@ -980,7 +995,9 @@ validate_versions([], Versions) ->
 validate_versions([Version | Rest], Versions) when Version == 'tlsv1.2';
                                                    Version == 'tlsv1.1';
                                                    Version == tlsv1;
-                                                   Version == sslv3 ->
+                                                   Version == sslv3;
+                                                   Version == dtlsv1;
+                                                   Version == 'dtlsv1.2' ->
     validate_versions(Rest, Versions);
 validate_versions([Ver| _], Versions) ->
     throw({error, {options, {Ver, {versions, Versions}}}}).

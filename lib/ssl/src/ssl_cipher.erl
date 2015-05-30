@@ -303,8 +303,13 @@ aead_decipher(Type, #cipher_state{key = Key, iv = IV} = CipherState,
 suites({3, 0}) ->
     ssl_v3:suites();
 suites({3, N}) ->
-    tls_v1:suites(N).
+    tls_v1:suites(N);
+suites({254, _} = Version) ->
+    {_, Minor} = dtls_v1:corresponding_tls_version(Version),
+    tls_v1:suites(Minor).
 
+all_suites({254, _} = Version) ->
+    all_suites(dtls_v1:corresponding_tls_version(Version));
 all_suites(Version) ->
     suites(Version)
 	++ anonymous_suites(Version)
@@ -1621,6 +1626,9 @@ hash_size(sha384) ->
 %%   We return the original (possibly invalid) PadLength in any case.
 %%   An invalid PadLength will be caught by is_correct_padding/2
 %%
+generic_block_cipher_from_bin({254, _} = Version, T, IV, HashSize) ->
+    generic_block_cipher_from_bin(dtls_v1:corresponding_tls_version(Version), T, IV, HashSize);
+
 generic_block_cipher_from_bin({3, N}, T, IV, HashSize)
   when N == 0; N == 1 ->
     Sz1 = byte_size(T) - 1,
@@ -1655,6 +1663,9 @@ generic_stream_cipher_from_bin(T, HashSz) ->
     #generic_stream_cipher{content=Content,
 			   mac=Mac}.
 
+is_correct_padding(GenericBlockCipher, {254, _} = Version, Check) ->
+    is_correct_padding(GenericBlockCipher,
+        dtls_v1:corresponding_tls_version(Version), Check);
 is_correct_padding(#generic_block_cipher{padding_length = Len,
 					 padding = Padding}, {3, 0}, _) ->
     Len == byte_size(Padding); %% Only length check is done in SSL 3.0 spec

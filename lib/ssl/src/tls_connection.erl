@@ -565,7 +565,7 @@ write_application_data(Data0, From,
 			      send_queue = SendQueue,
 			      socket_options = SockOpts,
 			      ssl_options = #ssl_options{renegotiate_at = RenegotiateAt}} = State) ->
-    Data = encode_packet(Data0, SockOpts),
+    Data = ssl_connection:encode_packet(Data0, SockOpts),
     
     case time_to_renegotiate(Data, ConnectionStates0, RenegotiateAt) of
 	true ->
@@ -576,21 +576,6 @@ write_application_data(Data0, From,
 	    Result = Transport:send(Socket, Msgs),
 	    {reply, Result,
 	     connection, State#state{connection_states = ConnectionStates}, get_timeout(State)}
-    end.
-
-encode_packet(Data, #socket_options{packet=Packet}) ->
-    case Packet of
-	1 -> encode_size_packet(Data, 8,  (1 bsl 8) - 1);
-	2 -> encode_size_packet(Data, 16, (1 bsl 16) - 1);
-	4 -> encode_size_packet(Data, 32, (1 bsl 32) - 1);
-	_ -> Data
-    end.
-
-encode_size_packet(Bin, Size, Max) ->
-    Len = erlang:byte_size(Bin),
-    case Len > Max of
-	true  -> throw({error, {badarg, {packet_to_large, Len, Max}}});
-	false -> <<Len:Size, Bin/binary>>
     end.
 
 time_to_renegotiate(_Data, 

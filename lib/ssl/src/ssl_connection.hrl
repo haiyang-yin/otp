@@ -81,7 +81,11 @@
           negotiated_protocol = undefined             :: undefined | binary(),
 	  client_ecc,          % {Curves, PointFmt}
 	  tracker              :: pid(), %% Tracker process for listen socket
-	  sni_hostname = undefined
+	  sni_hostname = undefined,
+          %% negotiated_version is used for TLS layer handshake protocol and
+          %% dtls uses a separate version.
+          dtls_version         :: ssl_record:ssl_version(),
+          flight               % flight state machine instance
 	 }).
 
 -define(DEFAULT_DIFFIE_HELLMAN_PARAMS,

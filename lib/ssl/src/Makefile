@@ -56,6 +56,9 @@ MODULES= \
 	ssl_srp_primes \
 	tls_connection \
 	dtls_connection \
+	dtls_transport \
+	dtls_socket_manager \
+	dtls_socket_server \
 	ssl_config \
 	ssl_connection \
 	tls_connection_sup \

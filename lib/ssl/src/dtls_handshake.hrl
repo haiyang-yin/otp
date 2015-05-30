@@ -53,4 +53,11 @@
 	 completed
 	}).
 
+-define(DEFAULT_MSS_UDP, 512).
+
+-define(FLIGHT_PREPARING_STATE, preparing).
+-define(FLIGHT_SENDING_STATE,   sending).
+-define(FLIGHT_WAITING_STATE,   waiting).
+-define(FLIGHT_FINISHED_STATE,  finished).
+
 -endif. % -ifdef(dtls_handshake).

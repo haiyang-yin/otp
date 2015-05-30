@@ -119,25 +119,12 @@ get_dtls_records_aux(Data, Acc) ->
 	    ?ALERT_REC(?FATAL, ?UNEXPECTED_MESSAGE)
     end.
 
-encode_plain_text(Type, Version, Data,
-		  #connection_states{current_write =
-					 #connection_state{
-					    epoch = Epoch,
-					    sequence_number = Seq,
-					    compression_state=CompS0,
-					    security_parameters=
-						#security_parameters{
-						   cipher_type = ?AEAD,
-						   compression_algorithm=CompAlg}
-					   }= WriteState0} = ConnectionStates) ->
-    {Comp, CompS1} = ssl_record:compress(CompAlg, Data, CompS0),
-    WriteState1 = WriteState0#connection_state{compression_state = CompS1},
-    AAD = calc_aad(Type, Version, Epoch, Seq),
-    {CipherFragment, WriteState} = ssl_record:cipher_aead(dtls_v1:corresponding_tls_version(Version),
-							  Comp, WriteState1, AAD),
-    CipherText = encode_tls_cipher_text(Type, Version, Epoch, Seq, CipherFragment),
-    {CipherText, ConnectionStates#connection_states{current_write =
-							WriteState#connection_state{sequence_number = Seq +1}}};
+%encode_plain_text(_, _, [], ConnectionStates0, Acc) ->
+%    {lists:reverse(Acc), ConnectionStates0};
+
+%encode_plain_text(Type, Version, [H | T], ConnectionStates0, Acc) ->
+%    {CipherText, ConnectionStates} = encode_plain_text(Type, Version, H, ConnectionStates0),
+%    encode_plain_text(Type, Version, T, ConnectionStates, [CipherText | Acc]).
 
 encode_plain_text(Type, Version, Data,
 		  #connection_states{current_write=#connection_state{
@@ -169,7 +156,8 @@ decode_cipher_text(#ssl_tls{type = Type, version = Version,
 						    compression_algorithm=CompAlg}
 					    } = ReadState0}= ConnnectionStates0) ->
     AAD = calc_aad(Type, Version, Epoch, Seq),
-    case ssl_record:decipher_aead(dtls_v1:corresponding_tls_version(Version),
+    %% on-wire version will be used for decipher
+    case ssl_record:decipher_aead(Version,
 				  CipherFragment, ReadState0, AAD) of
 	{PlainFragment, ReadState1} ->
 	    {Plain, CompressionS1} = ssl_record:uncompress(CompAlg,
@@ -193,7 +181,8 @@ decode_cipher_text(#ssl_tls{type = Type, version = Version,
 						 #security_parameters{
 						    compression_algorithm=CompAlg}
 					    } = ReadState0}= ConnnectionStates0) ->
-    {PlainFragment, Mac, ReadState1} = ssl_record:decipher(dtls_v1:corresponding_tls_version(Version),
+        %% on-wire version will be used for decipher
+        {PlainFragment, Mac, ReadState1} = ssl_record:decipher(Version,
 							   CipherFragment, ReadState0, true),
     MacHash = calc_mac_hash(ReadState1, Type, Version, Epoch, Seq, PlainFragment),
     case ssl_record:is_correct_mac(Mac, MacHash) of
@@ -214,6 +203,7 @@ decode_cipher_text(#ssl_tls{type = Type, version = Version,
 %% Description: Encodes a handshake message to send on the ssl-socket.
 %%--------------------------------------------------------------------
 encode_handshake(Frag, Version, ConnectionStates) ->
+    % encode_plain_text(?HANDSHAKE, Version, Frag, ConnectionStates, []).
     encode_plain_text(?HANDSHAKE, Version, Frag, ConnectionStates).
 
 %%--------------------------------------------------------------------

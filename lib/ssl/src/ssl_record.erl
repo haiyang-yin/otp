@@ -470,7 +470,8 @@ record_protocol_role(server) ->
 initial_connection_state(ConnectionEnd) ->
     #connection_state{security_parameters =
 			  initial_security_params(ConnectionEnd),
-                      sequence_number = 0
+                      sequence_number = 0,
+                      epoch =0
                      }.
 
 initial_security_params(ConnectionEnd) ->

@@ -48,7 +48,7 @@
 
 -export([handle_session/7, next_state_connection/2, read_application_data/2,
          passive_receive/2, handle_alerts/2, alert_user/6, alert_user/9,
-         log_alert/3]).
+         log_alert/3, encode_packet/2]).
 
 %% SSL FSM state functions 
 -export([hello/3, abbreviated/3, certify/3, cipher/3, connection/3]).
@@ -737,8 +737,7 @@ handle_sync_event({shutdown, How0}, _, StateName,
 handle_sync_event({recv, _N, _Timeout}, _RecvFrom, StateName,  
 		  #state{socket_options = #socket_options{active = Active}} = State) when Active =/= false ->
     {reply, {error, einval}, StateName, State, get_timeout(State)};
-handle_sync_event({recv, N, Timeout}, RecvFrom, connection = StateName,  
-		  #state{protocol_cb = Connection} = State0) ->
+handle_sync_event({recv, N, Timeout}, RecvFrom, connection = StateName, State0) ->
     Timer = start_or_recv_cancel_timer(Timeout, RecvFrom),
     passive_receive(State0#state{bytes_to_read = N,
 					    start_or_recv_from = RecvFrom, timer = Timer}, StateName);
@@ -1605,8 +1604,7 @@ handle_srp_identity(Username, {Fun, UserState}) ->
     end.
 
 
-cipher_role(client, Data, Session, #state{connection_states = ConnectionStates0} = State,
-	    Connection) ->
+cipher_role(client, Data, Session, #state{connection_states = ConnectionStates0} = State, _) ->
     ConnectionStates = ssl_record:set_server_verify_data(current_both, Data, ConnectionStates0),
     next_state_connection(cipher,
 				     ack_connection(
@@ -2186,3 +2184,17 @@ invalidate_session(client, Host, Port, Session) ->
 invalidate_session(server, _, Port, Session) ->
     ssl_manager:invalidate_session(Port, Session).
 
+encode_size_packet(Bin, Size, Max) ->
+    Len = erlang:byte_size(Bin),
+    case Len > Max of
+        true  -> throw({error, {badarg, {packet_to_large, Len, Max}}});
+        false -> <<Len:Size, Bin/binary>>
+    end.
+
+encode_packet(Data, #socket_options{packet=Packet}) ->
+    case Packet of
+        1 -> encode_size_packet(Data, 8,  (1 bsl 8) - 1);
+        2 -> encode_size_packet(Data, 16, (1 bsl 16) - 1);
+        4 -> encode_size_packet(Data, 32, (1 bsl 32) - 1);
+        _ -> Data
+    end.

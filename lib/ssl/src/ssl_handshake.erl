@@ -705,12 +705,11 @@ encode_handshake(#next_protocol{selected_protocol = SelectedProtocol}, _Version)
     {?NEXT_PROTOCOL, <<?BYTE((byte_size(SelectedProtocol))), SelectedProtocol/binary,
                          ?BYTE(PaddingLength), 0:(PaddingLength * 8)>>};
 
-encode_handshake(#server_hello{server_version = {Major, Minor},
-			       random = Random,
+encode_handshake(#server_hello{random = Random,
 			       session_id = Session_ID,
 			       cipher_suite = CipherSuite,
 			       compression_method = Comp_method,
-			       extensions = #hello_extensions{} = Extensions}, _Version) ->
+			       extensions = #hello_extensions{} = Extensions}, {Major, Minor}) ->
 			SID_length = byte_size(Session_ID),
     ExtensionsBin = encode_hello_extensions(Extensions),
     {?SERVER_HELLO, <<?BYTE(Major), ?BYTE(Minor), Random:32/binary,
